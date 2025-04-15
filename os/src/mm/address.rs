@@ -191,6 +191,11 @@ impl PhysPageNum {
         let pa: PhysAddr = (*self).into();
         pa.get_mut()
     }
+
+    /// Get the start physical address of the page
+    pub fn base(&self) -> PhysAddr {
+        PhysAddr(self.0 << PAGE_SIZE_BITS)
+    }
 }
 
 /// iterator for phy/virt page number
@@ -226,6 +231,10 @@ where
     }
     pub fn get_end(&self) -> T {
         self.r
+    }
+
+    pub fn overlaps(&self, rhs: &SimpleRange<T>) -> bool {
+        return self.l < rhs.r && rhs.l < self.r;
     }
 }
 impl<T> IntoIterator for SimpleRange<T>

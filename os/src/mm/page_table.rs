@@ -4,6 +4,7 @@ use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPag
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
+use core::result::Result;
 
 bitflags! {
     /// page table entry flags
@@ -115,6 +116,7 @@ impl PageTable {
         }
         result
     }
+
     /// Find PageTableEntry by VirtPageNum
     fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
@@ -147,6 +149,34 @@ impl PageTable {
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
     }
+
+    /// set the map between virtual page number and physical page number
+    pub fn my_map(
+        &mut self,
+        vpn: VirtPageNum,
+        ppn: PhysPageNum,
+        flags: PTEFlags,
+    ) -> Result<(), &str> {
+        let pte = self.find_pte_create(vpn).unwrap();
+        if pte.is_valid() {
+            return Err("vpn is mapped before mapping");
+        }
+        *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+        Ok(())
+    }
+
+    /// remove the map between virtual page number and physical page number
+    pub fn my_unmap(&mut self, vpn: VirtPageNum) -> Result<(), &str> {
+        if let Some(pte) = self.find_pte(vpn) {
+            if !pte.is_valid() {
+                return Err("vpn is invalid before unmapping");
+            }
+            *pte = PageTableEntry::empty();
+            Ok(())
+        } else {
+            Err("PTE not found")
+        }
+    }
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)
@@ -178,4 +208,21 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Copy len bytes from kernel src to userspace dst
+pub fn copy_to_user(token: usize, dst: *mut u8, buffer: Vec<u8>) {
+    let page_table = PageTable::from_token(token);
+    let mut start = dst as usize;
+    for i in buffer.iter() {
+        let start_va = VirtAddr::from(start);
+        let vpn = start_va.floor();
+        let ppn = page_table.translate(vpn).unwrap().ppn();
+        let pa = ppn.base().0 + start_va.page_offset();
+        // println!("copy_to_user: data: {:?}, dst: {:#x}", i, pa);
+        unsafe {
+            core::ptr::copy_nonoverlapping(i, pa as *mut u8, 1);
+        }
+        start += core::mem::size_of::<u8>();
+    }
 }

@@ -262,6 +262,90 @@ impl MemorySet {
             false
         }
     }
+
+    ///mmap
+    pub fn mmap(&mut self, addr: usize, len: usize, prot: usize) -> Result<(), &'static str> {
+        let start = VirtAddr(addr).floor();
+        let end = VirtAddr(addr + len).ceil();
+        info!("mmapping: {:?}, {:?}", start, end);
+        let mut map_perm = MapPermission::U;
+        {
+            if prot & (1 << 0) != 0 {
+                map_perm |= MapPermission::R;
+            }
+            if prot & (1 << 1) != 0 {
+                map_perm |= MapPermission::W;
+            }
+            if prot & (1 << 2) != 0 {
+                map_perm |= MapPermission::X;
+            }
+        }
+        let map_area = MapArea::new(start.into(), end.into(), MapType::Framed, map_perm);
+        for area in self.areas.iter() {
+            if area.vpn_range.overlaps(&map_area.vpn_range) {
+                error!(
+                    "overlap with existing area: {:?}, {:?}",
+                    area.vpn_range.get_start(),
+                    area.vpn_range.get_end()
+                );
+                return Err("overlap with existing area");
+            }
+        }
+        self.push(map_area, None);
+        Ok(())
+    }
+
+    ///munmap
+    pub fn munmap(&mut self, addr: usize, len: usize) -> Result<(), &'static str> {
+        let mut start = VirtAddr(addr).floor();
+        let end = VirtAddr(addr + len).ceil();
+        info!("munmapping: {:?}, {:?}", start, end);
+        while start < end {
+            if let Some(pte) = self.page_table.translate(start) {
+                if !pte.is_valid() {
+                    return Err("vpn is invalid when unmapping");
+                }
+            } else {
+                return Err("vpn is invalid when unmapping");
+            }
+
+            for area in self.areas.iter_mut() {
+                if area.vpn_range.get_start() == start {
+                    area.unmap(&mut self.page_table);
+                }
+            }
+            self.areas
+                .retain(|area| area.vpn_range.get_start() != start);
+            start.step();
+        }
+        Ok(())
+    }
+
+    /// if addr readable by user program
+    pub fn is_user_readable(&self, addr: usize) -> bool {
+        let vpn = VirtAddr(addr).floor();
+        if addr > (1 << 39 - 1) {
+            error!("vpn is too large for SV39: {:?}", vpn);
+            return false;
+        }
+        info!("is_user_readable: vpn: {:?}", vpn);
+        if let Some(pte) = self.page_table.translate(vpn) {
+            pte.is_valid() && pte.readable()
+        } else {
+            false
+        }
+    }
+
+    /// if addr writable by user program
+    pub fn is_user_writable(&self, addr: usize) -> bool {
+        let vpn = VirtAddr(addr).floor();
+        info!("is_user_writable: vpn: {:?}", vpn);
+        if let Some(pte) = self.page_table.translate(vpn) {
+            pte.is_valid() && pte.writable()
+        } else {
+            false
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

@@ -46,6 +46,7 @@ struct TaskManagerInner {
     tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
+    syscall_count: [[usize; 512]; 256],
 }
 
 lazy_static! {
@@ -64,6 +65,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    syscall_count: [[0;512];256],
                 })
             },
         }
@@ -153,6 +155,47 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn increment_syscall_count(&self, _id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.syscall_count[current][_id] += 1;
+    }
+
+    fn get_syscall_count(&self, _id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.syscall_count[current][_id]
+    }
+    /// Check if the address is writable by user program
+    pub fn is_user_writable(&self, addr: usize) -> bool {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mem = &inner.tasks[current].memory_set;
+        mem.is_user_writable(addr)
+    }
+
+    /// Check if the address is readable by user program
+    pub fn is_user_readable(&self, addr: usize) -> bool {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mem = &inner.tasks[current].memory_set;
+        mem.is_user_readable(addr)
+    }
+
+    fn mmap(&self, _addr: usize, _len: usize, _prot: usize) -> Result<(), &str> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mem = &mut inner.tasks[current].memory_set;
+        mem.mmap(_addr, _len, _prot)
+    }
+
+    fn munmap(&self, _addr: usize, _len: usize) -> Result<(), &str> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mem = &mut inner.tasks[current].memory_set;
+        mem.munmap(_addr, _len)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +244,34 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increment the number of syscalls made by the task with the given ID by 1.
+pub fn increment_syscall_count(_id: usize) {
+    TASK_MANAGER.increment_syscall_count(_id);
+}
+
+/// Returns the number of syscalls made by the task with the given ID.
+pub fn get_syscall_count(_id: usize) -> usize {
+    TASK_MANAGER.get_syscall_count(_id)
+}
+
+/// map a memory region of size `len` at address `addr` with protection `prot`.
+pub fn mmap(_addr: usize, _len: usize, _prot: usize) -> Result<(), &'static str> {
+    TASK_MANAGER.mmap(_addr, _len, _prot)
+}
+
+/// unmap a memory region of size `len` at address `addr`.
+pub fn munmap(_addr: usize, _len: usize) -> Result<(), &'static str> {
+    TASK_MANAGER.munmap(_addr, _len)
+}
+
+/// If the address writable by user program
+pub fn is_user_writable(addr: usize) -> bool {
+    TASK_MANAGER.is_user_writable(addr)
+}
+
+/// If the address readable by user program
+pub fn is_user_readable(addr: usize) -> bool {
+    TASK_MANAGER.is_user_readable(addr)
 }
