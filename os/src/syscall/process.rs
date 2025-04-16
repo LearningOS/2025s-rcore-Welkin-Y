@@ -3,12 +3,14 @@
 use alloc::sync::Arc;
 
 use crate::{
+    config::PAGE_SIZE,
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{copy_to_user, translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
     },
+    timer::get_time_us,
 };
 
 #[repr(C)]
@@ -102,33 +104,65 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     // ---- release current PCB automatically
 }
 
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().pid.0);
+    let us = get_time_us();
+    let tm = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    let tm_ptr = &tm as *const TimeVal as *const u8;
+    let tm_size = core::mem::size_of::<TimeVal>();
+    let tm_bytes = unsafe { core::slice::from_raw_parts(tm_ptr, tm_size) };
+    copy_to_user(current_user_token(), _ts as *mut u8, tm_bytes.to_vec());
+    0
 }
 
-/// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+pub fn sys_mmap(_start: usize, _len: usize, _prot: usize) -> isize {
+    trace!("kernel:pid[{}] sys_mmap", current_task().unwrap().pid.0);
+    // Required _start page aligned
+    info!(
+        "sys_mmap: start: {:#x}, len: {}, prot: {:b}",
+        _start, _len, _prot
     );
-    -1
+    if _start % PAGE_SIZE != 0 {
+        error!("start page is not page aligned in mmap");
+        return -1;
+    }
+    // Rest of _prot must be 0
+    if _prot & !0x7 != 0 || _prot & 0x7 == 0 {
+        error!("Invalid prot bits");
+        return -1;
+    }
+    let control_block = current_task().unwrap();
+    let mut inner = control_block.inner_exclusive_access();
+    let memset = &mut inner.memory_set;
+    match memset.mmap(_start, _len, _prot) {
+        Ok(_) => 0,
+        Err(e) => {
+            error!("mmap failed: {}", e);
+            -1
+        }
+    }
 }
 
-/// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_munmap", current_task().unwrap().pid.0);
+    // Required _start page aligned
+    if _start % PAGE_SIZE != 0 {
+        error!("start page is not page aligned in mmap");
+        return -1;
+    }
+    let control_block = current_task().unwrap();
+    let mut inner = control_block.inner_exclusive_access();
+    let memset = &mut inner.memory_set;
+    match memset.munmap(_start, _len) {
+        Ok(_) => 0,
+        Err(e) => {
+            error!("munmap failed: {}", e);
+            -1
+        }
+    }
 }
 
 /// change data segment size
@@ -141,21 +175,35 @@ pub fn sys_sbrk(size: i32) -> isize {
     }
 }
 
-/// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let current_task = current_task().unwrap();
+        let new_task = current_task.spawn(all_data.as_slice());
+        let new_pid = new_task.pid.0;
+        add_task(new_task);
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
 pub fn sys_set_priority(_prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
+    info!("sys_set_priority: prio: {}", _prio);
+    if _prio >= 2 {
+        let task = current_task().unwrap();
+        let mut inner = task.inner_exclusive_access();
+        inner.priority = _prio as usize;
+        return _prio;
+    }
     -1
 }
