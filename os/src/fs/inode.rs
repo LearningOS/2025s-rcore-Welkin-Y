@@ -53,6 +53,18 @@ impl OSInode {
         }
         v
     }
+
+    /// Link at new path
+    pub fn linkat(&self, new_path: &str) -> Result<(), &'static str> {
+        let inner = self.inner.exclusive_access();
+        inner.inode.linkat(new_path)
+    }
+
+    /// Unlink at path
+    pub fn unlinkat(&self, path: &str) -> Result<(), &'static str> {
+        let inner = self.inner.exclusive_access();
+        inner.inode.unlinkat(path)
+    }
 }
 
 lazy_static! {
@@ -155,5 +167,19 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+
+    /// return file stat
+    fn stat(&self) -> Result<crate::fs::Stat, &'static str> {
+        let mut stat = crate::fs::Stat::default();
+        let (ino, mode_bits, nlink) = self.inner.exclusive_access().inode.fstat()?;
+        info!("ino: {}, mode: {}, links: {}", ino, mode_bits, nlink);
+        stat.ino = ino;
+        stat.mode = match crate::fs::StatMode::from_bits(mode_bits) {
+            Some(mode) => mode,
+            None => crate::fs::StatMode::NULL,
+        };
+        stat.nlink = nlink;
+        Ok(stat)
     }
 }

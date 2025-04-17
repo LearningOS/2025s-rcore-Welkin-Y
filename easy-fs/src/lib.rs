@@ -16,3 +16,6 @@ pub use block_dev::BlockDevice;
 pub use efs::EasyFileSystem;
 use layout::*;
 pub use vfs::Inode;
+
+extern crate log;
+pub use crate::log::{error, info};
