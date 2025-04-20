@@ -10,6 +10,7 @@
 //! might not be what you expect.
 
 mod context;
+mod deadlock;
 mod id;
 mod manager;
 mod process;

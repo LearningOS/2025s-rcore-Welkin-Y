@@ -274,3 +274,17 @@ impl Iterator for UserBufferIterator {
         }
     }
 }
+
+/// Copy len bytes from kernel src to userspace dst
+pub fn copy_to_user(token: usize, dst: *mut u8, buffer: Vec<u8>) {
+    let page_table = PageTable::from_token(token);
+    let mut start = dst as usize;
+    for i in buffer.iter() {
+        let start_va = VirtAddr::from(start);
+        let pa: PhysAddr = page_table.translate_va(start_va).unwrap();
+        unsafe {
+            core::ptr::copy_nonoverlapping(i, pa.0 as *mut u8, 1);
+        }
+        start += core::mem::size_of::<u8>();
+    }
+}
